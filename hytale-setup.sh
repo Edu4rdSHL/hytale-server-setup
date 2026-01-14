@@ -34,6 +34,41 @@ SERVER_START_CMD="cd '${INSTALL_PATH}/Server' && java -jar HytaleServer.jar --as
 # If you know how to set the server password via command line, please let me know!
 # readonly SERVER_PASSWORD="${SERVER_PASSWORD:-your_password_here}"
 
+# Script mode: "install" (default) or "update"
+SCRIPT_MODE="install"
+
+# Parse command line arguments
+show_usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  -u, --update    Check for and apply server updates"
+    echo "  -h, --help      Show this help message"
+    echo ""
+    echo "Environment variables:"
+    echo "  INSTALL_PATH              Installation directory (default: /opt/Hytale)"
+    echo "  HYTALE_SERVER_VERSION     Server version: release, pre-release, or specific (default: release)"
+    echo "  ADOPTIUM_JDK_VERSION      JDK version to install (default: 25)"
+    echo "  LOCAL_HYTALE_SERVER_ZIP   Path to local server zip file (skips download)"
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -u|--update)
+            SCRIPT_MODE="update"
+            shift
+            ;;
+        -h|--help)
+            show_usage
+            ;;
+        *)
+            echo "Unknown option: $1"
+            show_usage
+            ;;
+    esac
+done
+
 # Color definitions
 if [ -t 1 ]; then
     RED='\033[0;31m'
@@ -124,6 +159,216 @@ bail() {
   log_error "$1"
   exit 1
 }
+
+# Update function to check and apply server updates
+do_update() {
+    log_step "Checking for Hytale server updates"
+
+    # Verify installation exists
+    if [ ! -d "$INSTALL_PATH/Server" ]; then
+        bail "Hytale server not found at $INSTALL_PATH/Server. Please run the installer first."
+    fi
+
+    if [ ! -f "$INSTALL_PATH/Server/HytaleServer.jar" ]; then
+        bail "HytaleServer.jar not found. Please run the installer first."
+    fi
+
+    # Get current installed version
+    log_info "Getting current server version..."
+    cd "$INSTALL_PATH/Server" || bail "Failed to change to server directory"
+    
+    CURRENT_VERSION=$(java -jar HytaleServer.jar --version 2>/dev/null || echo "unknown")
+    CURRENT_VERSION=$(echo "$CURRENT_VERSION" | tr -d '\n' | tr -d '\r')
+    
+    if [ -z "$CURRENT_VERSION" ] || [ "$CURRENT_VERSION" = "unknown" ]; then
+        log_warn "Could not determine current server version. Will proceed with update check."
+        CURRENT_VERSION="unknown"
+    else
+        log_info "Current version: ${CYAN}$CURRENT_VERSION${NC}"
+    fi
+
+    # Ensure downloader exists, download if needed
+    cd "$INSTALL_PATH" || bail "Failed to change to installation directory"
+    
+    if [ ! -f "$INSTALL_PATH/hytale-downloader-linux-amd64" ]; then
+        log_info "Downloader not found, downloading..."
+        wget -O hytale-downloader.zip "$HYTALE_DOWNLOADER_URL" \
+            || bail "Failed to download Hytale Downloader."
+        unzip -o hytale-downloader.zip -d "$INSTALL_PATH" > /dev/null \
+            || bail "Failed to unzip Hytale Downloader."
+    fi
+
+    # Run downloader briefly to get latest version info
+    log_info "Checking latest available version..."
+    
+    # Run the downloader and capture output, kill it after getting version info
+    DOWNLOADER_OUTPUT=$(timeout 10s ./hytale-downloader-linux-amd64 -patchline "$HYTALE_SERVER_VERSION" 2>&1 || true)
+    
+    # Extract version from output like: downloading latest ("pre-release" patchline) to "2026.01.14-3e7a0ba6c.zip"
+    LATEST_VERSION=$(echo "$DOWNLOADER_OUTPUT" | grep -oP 'to "\K[^"]+(?=\.zip")' | head -1 || echo "")
+    
+    if [ -z "$LATEST_VERSION" ]; then
+        # Try alternative pattern
+        LATEST_VERSION=$(echo "$DOWNLOADER_OUTPUT" | grep -oP '"[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[a-f0-9]+' | tr -d '"' | head -1 || echo "")
+    fi
+
+    if [ -z "$LATEST_VERSION" ]; then
+        log_error "Could not determine latest version from downloader output."
+        log_info "Downloader output:"
+        echo "$DOWNLOADER_OUTPUT"
+        bail "Update check failed."
+    fi
+
+    log_info "Latest version: ${CYAN}$LATEST_VERSION${NC}"
+
+    # Compare versions
+    if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+        log_success "Server is already up to date!"
+        exit 0
+    fi
+
+    if [ "$CURRENT_VERSION" = "unknown" ]; then
+        log_warn "Could not compare versions. Proceeding with update..."
+    else
+        log_info "Update available: $CURRENT_VERSION -> $LATEST_VERSION"
+    fi
+
+    # Ask for confirmation
+    echo
+    echo -e "${YELLOW}Do you want to update the server? [y/N]${NC}"
+    read -r -n 1 CONFIRM
+    echo
+    
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        log_info "Update cancelled."
+        exit 0
+    fi
+
+    # Check if server is running (systemd)
+    if [ "$IS_SYSTEMCTL_AVAILABLE" = true ]; then
+        if systemctl is-active --quiet hytale-server.service 2>/dev/null; then
+            log_warn "Hytale server is currently running (systemd)."
+            echo -e "${YELLOW}Stop the server before updating? [Y/n]${NC}"
+            read -r -n 1 STOP_CONFIRM
+            echo
+            
+            if [[ ! "$STOP_CONFIRM" =~ ^[Nn]$ ]]; then
+                log_step "Stopping Hytale server..."
+                systemctl stop hytale-server.service || bail "Failed to stop server."
+                log_success "Server stopped."
+            else
+                bail "Cannot update while server is running. Please stop the server first."
+            fi
+        fi
+    fi
+
+    # Check if server is running (Docker)
+    if command -v docker >/dev/null 2>&1; then
+        DOCKER_CONTAINER=$(docker ps --filter "name=hytale" --format "{{.Names}}" 2>/dev/null | head -1)
+        if [ -n "$DOCKER_CONTAINER" ]; then
+            log_warn "Hytale server is currently running in Docker container: $DOCKER_CONTAINER"
+            echo -e "${YELLOW}Stop the Docker container before updating? [Y/n]${NC}"
+            read -r -n 1 STOP_DOCKER_CONFIRM
+            echo
+            
+            if [[ ! "$STOP_DOCKER_CONFIRM" =~ ^[Nn]$ ]]; then
+                log_step "Stopping Docker container: $DOCKER_CONTAINER..."
+                docker stop "$DOCKER_CONTAINER" || bail "Failed to stop Docker container."
+                log_success "Docker container stopped."
+            else
+                bail "Cannot update while server is running in Docker. Please stop the container first."
+            fi
+        fi
+    fi
+
+    # Check if server is running (Podman)
+    if command -v podman >/dev/null 2>&1; then
+        PODMAN_CONTAINER=$(podman ps --filter "name=hytale" --format "{{.Names}}" 2>/dev/null | head -1)
+        if [ -n "$PODMAN_CONTAINER" ]; then
+            log_warn "Hytale server is currently running in Podman container: $PODMAN_CONTAINER"
+            echo -e "${YELLOW}Stop the Podman container before updating? [Y/n]${NC}"
+            read -r -n 1 STOP_PODMAN_CONFIRM
+            echo
+            
+            if [[ ! "$STOP_PODMAN_CONFIRM" =~ ^[Nn]$ ]]; then
+                log_step "Stopping Podman container: $PODMAN_CONTAINER..."
+                podman stop "$PODMAN_CONTAINER" || bail "Failed to stop Podman container."
+                log_success "Podman container stopped."
+            else
+                bail "Cannot update while server is running in Podman. Please stop the container first."
+            fi
+        fi
+    fi
+
+    # Download the update
+    log_step "Downloading update..."
+    UPDATE_ZIP="$LATEST_VERSION.zip"
+    
+    ./hytale-downloader-linux-amd64 -download-path "$UPDATE_ZIP" -patchline "$HYTALE_SERVER_VERSION" \
+        || bail "Failed to download server update."
+
+    # Backup current files
+    log_step "Backing up current server files..."
+    BACKUP_DIR="$INSTALL_PATH/backups/$(date +%Y%m%d_%H%M%S)"
+    mkdir -p "$BACKUP_DIR" || bail "Failed to create backup directory."
+    
+    cp -f "$INSTALL_PATH/Server/HytaleServer.jar" "$BACKUP_DIR/" 2>/dev/null || true
+    cp -f "$INSTALL_PATH/Server/HytaleServer.aot" "$BACKUP_DIR/" 2>/dev/null || true
+    cp -f "$INSTALL_PATH/Server/Assets.zip" "$BACKUP_DIR/" 2>/dev/null || true
+    
+    log_success "Backup saved to: $BACKUP_DIR"
+
+    # Extract and update files
+    log_step "Extracting update..."
+    TEMP_DIR=$(mktemp -d)
+    unzip -o "$UPDATE_ZIP" -d "$TEMP_DIR" > /dev/null \
+        || bail "Failed to unzip update."
+
+    log_step "Updating server files..."
+    
+    # Update the server files
+    if [ -f "$TEMP_DIR/Server/HytaleServer.jar" ]; then
+        cp -f "$TEMP_DIR/Server/HytaleServer.jar" "$INSTALL_PATH/Server/" \
+            || bail "Failed to update HytaleServer.jar"
+    fi
+    
+    if [ -f "$TEMP_DIR/Server/HytaleServer.aot" ]; then
+        cp -f "$TEMP_DIR/Server/HytaleServer.aot" "$INSTALL_PATH/Server/" \
+            || bail "Failed to update HytaleServer.aot"
+    fi
+    
+    if [ -f "$TEMP_DIR/Assets.zip" ]; then
+        cp -f "$TEMP_DIR/Assets.zip" "$INSTALL_PATH/Server/Assets.zip" \
+            || bail "Failed to update Assets.zip"
+    fi
+
+    # Cleanup
+    rm -rf "$TEMP_DIR"
+    rm -f "$INSTALL_PATH/$UPDATE_ZIP"
+    
+    log_success "Server updated successfully!"
+    echo
+    log_info "Updated from $CURRENT_VERSION to $LATEST_VERSION"
+    log_info "Backup of previous version saved to: $BACKUP_DIR"
+    echo
+    
+    if [ "$IS_SYSTEMCTL_AVAILABLE" = true ]; then
+        log_info "To start the server, run:"
+        echo -e "  ${GREEN}sudo systemctl start hytale-server.service${NC}"
+    else
+        log_info "To start the server, run:"
+        echo -e "  ${GREEN}cd $INSTALL_PATH/Server && java -jar HytaleServer.jar --assets Assets.zip --disable-sentry${NC}"
+    fi
+    
+    exit 0
+}
+
+# Run update if requested
+if [ "$SCRIPT_MODE" = "update" ]; then
+    do_update
+fi
+
+# Main Installation Logic
 
 log_step "Creating installation directory"
 mkdir -p "$INSTALL_PATH" || { bail "Failed to create installation directory: $INSTALL_PATH"; }

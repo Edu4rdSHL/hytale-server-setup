@@ -12,6 +12,7 @@ After finishing this setup, it's recommended to setup Docker. See [DOCKER.md](DO
 - Configures UFW firewall rules
 - Colored terminal output for better visibility
 - Automatic cleanup on installation failure
+- **Built-in update mechanism** with automatic backups
 
 ## Requirements
 
@@ -87,6 +88,49 @@ sudo systemctl status hytale-server.service
 sudo journalctl -u hytale-server.service -f
 ```
 
+## Updating the Server
+
+The script includes a built-in update mechanism that:
+
+- Checks your current server version
+- Compares it with the latest available version
+- Creates a backup of your current files before updating
+- Updates only the necessary server files (preserves your configuration)
+
+### Check for and apply updates
+
+```bash
+sudo ./hytale-setup.sh --update
+# or
+sudo ./hytale-setup.sh -u
+```
+
+### What gets updated
+
+The update process replaces only the required server files that need updating:
+
+- `Server/HytaleServer.jar`
+- `Server/HytaleServer.aot`
+- `Server/Assets.zip`
+
+Your server configuration, world data, and other custom files are **preserved**.
+
+### Backups
+
+Before each update, a backup is automatically created at:
+
+```bash
+/opt/Hytale/backups/YYYYMMDD_HHMMSS/
+```
+
+To restore a backup, simply copy the files back:
+
+```bash
+sudo systemctl stop hytale-server.service # adjust the stop command if you're using docker/podman
+sudo cp /opt/Hytale/backups/YYYYMMDD_HHMMSS/* /opt/Hytale/Server/
+sudo systemctl start hytale-server.service # adjust the start command if you're using docker/podman
+```
+
 ## Connecting to Your Server
 
 After setup, players can connect using:
@@ -99,17 +143,22 @@ Make sure port `5520/udp` is open on your firewall and any cloud provider securi
 ## Troubleshooting
 
 ### Server fails to start after reboot
+
 Make sure you ran the `/auth` commands during initial setup. If not, you may need to re-authenticate.
 
 ### JDK installation fails
+
 Try setting a different `DISTRO_VERSION` that matches your system:
+
 ```bash
 sudo DISTRO_VERSION=bookworm ./hytale-setup.sh  # Debian 12
 sudo DISTRO_VERSION=jammy ./hytale-setup.sh     # Ubuntu 22.04
 ```
 
 ### Port already in use
+
 Check if another process is using port 5520:
+
 ```bash
 sudo lsof -i :5520
 ```
