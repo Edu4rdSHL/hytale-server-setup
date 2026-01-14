@@ -221,16 +221,20 @@ do_update() {
 
     log_info "Latest version: ${CYAN}$LATEST_VERSION${NC}"
 
+    # Normalize current version for comparison
+    # Extract just the date-hash part (e.g., "2026.01.13-50e69c385" from "HytaleServer v2026.01.13-50e69c385 (release)")
+    CURRENT_VERSION_NORMALIZED=$(echo "$CURRENT_VERSION" | grep -oP '[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[a-f0-9]+' | head -1 || echo "$CURRENT_VERSION")
+
     # Compare versions
-    if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
-        log_success "Server is already up to date!"
+    if [ "$CURRENT_VERSION_NORMALIZED" = "$LATEST_VERSION" ]; then
+        log_success "Server is already up to date! ($LATEST_VERSION)"
         exit 0
     fi
 
     if [ "$CURRENT_VERSION" = "unknown" ]; then
         log_warn "Could not compare versions. Proceeding with update..."
     else
-        log_info "Update available: $CURRENT_VERSION -> $LATEST_VERSION"
+        log_info "Update available: $CURRENT_VERSION_NORMALIZED -> $LATEST_VERSION"
     fi
 
     # Ask for confirmation
@@ -244,6 +248,9 @@ do_update() {
         exit 0
     fi
 
+    # Track how the server was stopped so we can suggest how to restart it
+    STOPPED_VIA=""
+
     # Check if server is running (systemd)
     if [ "$IS_SYSTEMCTL_AVAILABLE" = true ]; then
         if systemctl is-active --quiet hytale-server.service 2>/dev/null; then
@@ -256,6 +263,7 @@ do_update() {
                 log_step "Stopping Hytale server..."
                 systemctl stop hytale-server.service || bail "Failed to stop server."
                 log_success "Server stopped."
+                STOPPED_VIA="systemd"
             else
                 bail "Cannot update while server is running. Please stop the server first."
             fi
@@ -275,6 +283,7 @@ do_update() {
                 log_step "Stopping Docker container: $DOCKER_CONTAINER..."
                 docker stop "$DOCKER_CONTAINER" || bail "Failed to stop Docker container."
                 log_success "Docker container stopped."
+                STOPPED_VIA="docker:$DOCKER_CONTAINER"
             else
                 bail "Cannot update while server is running in Docker. Please stop the container first."
             fi
@@ -294,6 +303,7 @@ do_update() {
                 log_step "Stopping Podman container: $PODMAN_CONTAINER..."
                 podman stop "$PODMAN_CONTAINER" || bail "Failed to stop Podman container."
                 log_success "Podman container stopped."
+                STOPPED_VIA="podman:$PODMAN_CONTAINER"
             else
                 bail "Cannot update while server is running in Podman. Please stop the container first."
             fi
@@ -348,17 +358,33 @@ do_update() {
     
     log_success "Server updated successfully!"
     echo
-    log_info "Updated from $CURRENT_VERSION to $LATEST_VERSION"
+    log_info "Updated from $CURRENT_VERSION_NORMALIZED to $LATEST_VERSION"
     log_info "Backup of previous version saved to: $BACKUP_DIR"
     echo
     
-    if [ "$IS_SYSTEMCTL_AVAILABLE" = true ]; then
-        log_info "To start the server, run:"
-        echo -e "  ${GREEN}sudo systemctl start hytale-server.service${NC}"
-    else
-        log_info "To start the server, run:"
-        echo -e "  ${GREEN}cd $INSTALL_PATH/Server && java -jar HytaleServer.jar --assets Assets.zip --disable-sentry${NC}"
-    fi
+    # Show restart instructions based on how the server was stopped
+    log_info "To start the server, run:"
+    case "$STOPPED_VIA" in
+        systemd)
+            echo -e "  ${GREEN}sudo systemctl start hytale-server.service${NC}"
+            ;;
+        docker:*)
+            CONTAINER_NAME="${STOPPED_VIA#docker:}"
+            echo -e "  ${GREEN}docker start $CONTAINER_NAME${NC}"
+            ;;
+        podman:*)
+            CONTAINER_NAME="${STOPPED_VIA#podman:}"
+            echo -e "  ${GREEN}podman start $CONTAINER_NAME${NC}"
+            ;;
+        *)
+            # Server wasn't running, show generic instructions
+            if [ "$IS_SYSTEMCTL_AVAILABLE" = true ] && [ -f "/etc/systemd/system/hytale-server.service" ]; then
+                echo -e "  ${GREEN}sudo systemctl start hytale-server.service${NC}"
+            else
+                echo -e "  ${GREEN}cd $INSTALL_PATH/Server && java -jar HytaleServer.jar --assets Assets.zip --disable-sentry${NC}"
+            fi
+            ;;
+    esac
     
     exit 0
 }
