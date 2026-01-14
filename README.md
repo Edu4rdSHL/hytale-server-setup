@@ -2,6 +2,8 @@
 
 Automated setup script for Hytale dedicated servers on Debian/Ubuntu Linux systems.
 
+After finishing this setup, it's recommended to setup Docker. See [DOCKER.md](DOCKER.md) for instructions.
+
 ## Features
 
 - Installs Adoptium JDK (recommended by Hytale)
