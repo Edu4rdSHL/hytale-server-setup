@@ -29,7 +29,7 @@ HYTALE_SERVER_ZIP_FILENAME="hytale-server.zip"
 # Default: "" - use downloader
 readonly LOCAL_HYTALE_SERVER_ZIP="${LOCAL_HYTALE_SERVER_ZIP:-}"
 # Server cmd to start the Hytale server after setup. Depends on whether systemctl is available.
-SERVER_START_CMD="cd '${INSTALL_PATH}/Server' && java -jar HytaleServer.jar --assets Assets.zip &"
+SERVER_START_CMD="cd '${INSTALL_PATH}/Server' && java -jar HytaleServer.jar --assets Assets.zip --disable-sentry &"
 # Server password (I still don't know the command line argument for this, so this is just a placeholder for now)
 # If you know how to set the server password via command line, please let me know!
 # readonly SERVER_PASSWORD="${SERVER_PASSWORD:-your_password_here}"
@@ -206,7 +206,7 @@ Description=Hytale Server
 After=network.target
 [Service]
 WorkingDirectory=$INSTALL_PATH/Server
-ExecStart=/usr/bin/java -jar HytaleServer.jar --assets Assets.zip
+ExecStart=/usr/bin/java -jar HytaleServer.jar --assets Assets.zip --disable-sentry
 Restart=on-failure
 [Install]
 WantedBy=multi-user.target
