@@ -70,6 +70,53 @@ The script supports environment variables for customization:
 sudo INSTALL_PATH=/home/hytale/server HYTALE_SERVER_VERSION=pre-release ./hytale-setup.sh
 ```
 
+## Memory Configuration (Important!)
+
+For optimal server performance, you should configure the Java memory settings (`-Xms` and `-Xmx`) based on your server's available RAM:
+
+- **`-Xms`**: Initial heap size (minimum memory allocated at startup)
+- **`-Xmx`**: Maximum heap size (maximum memory the JVM can use)
+
+### Recommended Settings
+
+| Server RAM | `-Xms` | `-Xmx` | Example |
+|------------|--------|--------|---------|
+| 4 GB | 1024m | 2560m | `-Xms1024m -Xmx2560m` |
+| 8 GB | 2048m | 6144m | `-Xms2048m -Xmx6144m` |
+| 16 GB | 4096m | 12288m | `-Xms4096m -Xmx12288m` |
+| 32 GB | 8192m | 24576m | `-Xms8192m -Xmx24576m` |
+
+> **Tip:** Always leave some RAM for the operating system and other processes. A good rule of thumb is to allocate 75-80% of your total RAM to `-Xmx`.
+
+### Applying Memory Settings
+
+If using the systemd service, edit `/etc/systemd/system/hytale-server.service`:
+
+```bash
+sudo systemctl edit hytale-server.service
+```
+
+And add/modify the `ExecStart` line to include memory flags:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/java -Xms2048m -Xmx6144m -jar /opt/Hytale/Server/HytaleServer.jar --assets /opt/Hytale/Server/Assets.zip
+```
+
+Then reload and restart:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart hytale-server.service
+```
+
+If running manually:
+
+```bash
+cd /opt/Hytale/Server && java -Xms2048m -Xmx6144m -jar HytaleServer.jar --assets Assets.zip
+```
+
 ## Systemd Service
 
 If systemd is available, the script creates a service at `/etc/systemd/system/hytale-server.service`:
